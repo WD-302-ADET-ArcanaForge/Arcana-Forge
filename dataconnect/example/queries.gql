@@ -1,0 +1,8 @@
+query FindGameByTitle($title: String!) @auth(level: PUBLIC, insecureReason: "This operation is safe to expose to the public") {
+  games(where: { title: { eq: $title } }) {
+    id
+    title
+    publisher
+    description
+  }
+}

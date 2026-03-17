@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "186094595183",
+    "firebase_url": "https://arcana-forge-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "arcana-forge",
+    "storage_bucket": "arcana-forge.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:186094595183:android:7234746c03e1016446719a",
+        "android_client_info": {
+          "package_name": "com.example.arcana_forge"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCPgDpdB8d-Qxzjm6-vPy2Cf-oDWCsBmvM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

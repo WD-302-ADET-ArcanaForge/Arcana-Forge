@@ -1,0 +1,164 @@
+mutation CreateDemoData @transaction @auth(level: USER, insecureReason: "Seed data mutations should only be run by an authenticated user and are used for development purposes.") {
+  user_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440000",
+      displayName: "Alice",
+      email: "alice@example.com",
+      createdAt: "2023-01-01T10:00:00Z",
+      bio: "An avid board game player.",
+      location: "New York",
+      preferredGameTypes: ["Eurogame", "Cooperative"]
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440001",
+      displayName: "Bob",
+      email: "bob@example.com",
+      createdAt: "2023-01-02T11:00:00Z",
+      bio: "Loves strategy games and RPGs.",
+      location: "Los Angeles",
+      preferredGameTypes: ["Strategy", "RPG"]
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440002",
+      displayName: "Charlie",
+      email: "charlie@example.com",
+      createdAt: "2023-01-03T12:00:00Z",
+      bio: "Enjoys party games and social deduction.",
+      location: "Chicago",
+      preferredGameTypes: ["Party", "Social Deduction"]
+    }
+  ])
+  game_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440010",
+      title: "Catan",
+      publisher: "Mayfair Games",
+      minPlayers: 3,
+      maxPlayers: 4,
+      createdAt: "2023-01-01T10:30:00Z",
+      description: "A classic resource management game.",
+      genres: ["Eurogame", "Strategy"],
+      avgPlayTimeMinutes: 90,
+      imageUrl: "https://example.com/catan.jpg"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440011",
+      title: "Pandemic",
+      publisher: "Z-Man Games",
+      minPlayers: 2,
+      maxPlayers: 4,
+      createdAt: "2023-01-02T11:30:00Z",
+      description: "A cooperative game about stopping a global pandemic.",
+      genres: ["Cooperative", "Strategy"],
+      avgPlayTimeMinutes: 45,
+      imageUrl: "https://example.com/pandemic.jpg"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440012",
+      title: "Secret Hitler",
+      publisher: "Goat, Wolf, & Cabbage",
+      minPlayers: 5,
+      maxPlayers: 10,
+      createdAt: "2023-01-03T12:30:00Z",
+      description: "A dramatic game of political intrigue and betrayal.",
+      genres: ["Party", "Social Deduction"],
+      avgPlayTimeMinutes: 45,
+      imageUrl: "https://example.com/secrethitler.jpg"
+    }
+  ])
+  review_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440020",
+      rating: 5,
+      createdAt: "2023-01-04T13:00:00Z",
+      updatedAt: "2023-01-04T13:00:00Z",
+      reviewText: "Absolutely love Catan! So much fun with friends.",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      gameId: "550e8400-e29b-41d4-a716-446655440010"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440021",
+      rating: 4,
+      createdAt: "2023-01-05T14:00:00Z",
+      updatedAt: "2023-01-05T14:00:00Z",
+      reviewText: "Pandemic is a great cooperative experience, challenging but rewarding.",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      gameId: "550e8400-e29b-41d4-a716-446655440011"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440022",
+      rating: 5,
+      createdAt: "2023-01-06T15:00:00Z",
+      updatedAt: "2023-01-06T15:00:00Z",
+      reviewText: "Secret Hitler always leads to intense and hilarious moments!",
+      userId: "550e8400-e29b-41d4-a716-446655440002",
+      gameId: "550e8400-e29b-41d4-a716-446655440012"
+    }
+  ])
+  group_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440030",
+      name: "Strategy Gamers of NYC",
+      createdAt: "2023-01-07T16:00:00Z",
+      description: "A group for strategy board game enthusiasts in New York City.",
+      imageUrl: "https://example.com/nycgaming.jpg",
+      creatorId: "550e8400-e29b-41d4-a716-446655440000"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440031",
+      name: "LA RPG & Boardgame Fans",
+      createdAt: "2023-01-08T17:00:00Z",
+      description: "For players of RPGs and board games in the Los Angeles area.",
+      imageUrl: "https://example.com/larpg.jpg",
+      creatorId: "550e8400-e29b-41d4-a716-446655440001"
+    }
+  ])
+  gameSession_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440040",
+      sessionDate: "2023-01-10",
+      createdAt: "2023-01-10T18:00:00Z",
+      durationMinutes: 120,
+      notes: "First time playing Catan, it was a blast!",
+      location: "Alice's apartment",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      gameId: "550e8400-e29b-41d4-a716-446655440010"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440041",
+      sessionDate: "2023-01-11",
+      createdAt: "2023-01-11T19:00:00Z",
+      durationMinutes: 60,
+      notes: "Close call with the pandemic, but we won!",
+      location: "Bob's house",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      gameId: "550e8400-e29b-41d4-a716-446655440011"
+    }
+  ])
+  groupMembership_insertMany(data: [
+    {
+      joinedAt: "2023-01-07T16:05:00Z",
+      role: "Admin",
+      userId: "550e8400-e29b-41d4-a716-446655440000",
+      groupId: "550e8400-e29b-41d4-a716-446655440030"
+    },
+    {
+      joinedAt: "2023-01-08T17:10:00Z",
+      role: "Member",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      groupId: "550e8400-e29b-41d4-a716-446655440030"
+    },
+    {
+      joinedAt: "2023-01-08T17:05:00Z",
+      role: "Admin",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      groupId: "550e8400-e29b-41d4-a716-446655440031"
+    },
+    {
+      joinedAt: "2023-01-09T10:00:00Z",
+      role: "Member",
+      userId: "550e8400-e29b-41d4-a716-446655440002",
+      groupId: "550e8400-e29b-41d4-a716-446655440031"
+    }
+  ])
+}

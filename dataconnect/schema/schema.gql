@@ -1,0 +1,54 @@
+type User @table {
+  displayName: String!
+  createdAt: Timestamp!
+  email: String
+  bio: String
+  preferredGameTypes: [String]
+  location: String
+}
+
+type Game @table {
+  title: String!
+  publisher: String!
+  minPlayers: Int!
+  maxPlayers: Int!
+  createdAt: Timestamp!
+  description: String
+  genres: [String]
+  avgPlayTimeMinutes: Int
+  imageUrl: String
+}
+
+type GameSession @table {
+  sessionDate: Date!
+  createdAt: Timestamp!
+  durationMinutes: Int
+  notes: String
+  location: String
+  user: User
+  game: Game
+}
+
+type Review @table {
+  rating: Int!
+  createdAt: Timestamp!
+  updatedAt: Timestamp!
+  reviewText: String
+  user: User
+  game: Game
+}
+
+type Group @table {
+  name: String!
+  createdAt: Timestamp!
+  description: String
+  imageUrl: String
+  creator: User
+}
+
+type GroupMembership @table(key: ["user", "group"]) {
+  joinedAt: Timestamp!
+  role: String!
+  user: User!
+  group: Group!
+}

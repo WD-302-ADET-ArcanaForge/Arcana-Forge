@@ -86,22 +86,20 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
         SizedBox(height: compact ? 10 : 16),
-        ShaderMask(
-          shaderCallback: (bounds) {
-            return const LinearGradient(
-              colors: [Color(0xFF9C7BDF), Color(0xFFF173B8)],
-            ).createShader(bounds);
-          },
-          child: Text(
-            'Arcana Forge',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: _titleSizeForWidth(width),
-              fontWeight: FontWeight.w800,
-              letterSpacing: -1,
-              height: 1,
-            ),
+        Text(
+          'Arcana Forge',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: _titleSizeForWidth(width),
+            fontWeight: FontWeight.w800,
+            letterSpacing: -1,
+            height: 1,
+            foreground: Paint()
+              ..shader = const LinearGradient(
+                colors: [Color(0xFF9C7BDF), Color(0xFFF173B8)],
+              ).createShader(
+                Rect.fromLTWH(0, 0, width.clamp(260.0, 520.0), 80),
+              ),
           ),
         ),
         const SizedBox(height: 12),
@@ -223,8 +221,9 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
             SizedBox(height: compact ? 6 : 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+            Wrap(
+              alignment: WrapAlignment.center,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 const Text(
                   "Don't have an account? ",
@@ -260,6 +259,7 @@ class _LoginScreenState extends State<LoginScreen> {
         child: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              final mediaQuery = MediaQuery.of(context);
               final isCompactHeight = constraints.maxHeight <= 780;
 
               return Stack(
@@ -280,30 +280,33 @@ class _LoginScreenState extends State<LoginScreen> {
                       color: const Color(0xFFE95DB5).withValues(alpha: 0.16),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Column(
-                      children: [
-                        Expanded(
-                          flex: isCompactHeight ? 44 : 48,
-                          child: Center(
-                            child: _buildHero(
-                              width: constraints.maxWidth,
-                              compact: isCompactHeight,
+                  SingleChildScrollView(
+                    keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: EdgeInsets.only(bottom: mediaQuery.viewInsets.bottom),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 520),
+                              child: Padding(
+                                padding: EdgeInsets.only(top: isCompactHeight ? 10 : 20),
+                                child: _buildHero(
+                                  width: constraints.maxWidth,
+                                  compact: isCompactHeight,
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                        Expanded(
-                          flex: isCompactHeight ? 56 : 52,
-                          child: Align(
-                            alignment: Alignment.topCenter,
-                            child: ConstrainedBox(
+                            ConstrainedBox(
                               constraints: const BoxConstraints(maxWidth: 520),
                               child: _buildFormCard(compact: isCompactHeight),
                             ),
-                          ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ],
