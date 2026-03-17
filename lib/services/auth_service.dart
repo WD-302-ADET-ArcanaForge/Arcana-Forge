@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class AuthResult {
@@ -52,9 +53,14 @@ class LocalAuthService implements AuthService {
 }
 
 class FirebaseAuthService implements AuthService {
-  FirebaseAuthService({FirebaseAuth? auth}) : _auth = auth ?? FirebaseAuth.instance;
+  FirebaseAuthService({
+    FirebaseAuth? auth,
+    FirebaseFirestore? firestore,
+  })  : _auth = auth ?? FirebaseAuth.instance,
+        _firestore = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseAuth _auth;
+  final FirebaseFirestore _firestore;
 
   String _messageForAuthCode(
     String code, {
@@ -94,13 +100,36 @@ class FirebaseAuthService implements AuthService {
     }
   }
 
+  Future<void> _upsertUserProfile(User user, {String? fallbackName}) async {
+    final displayName = user.displayName?.trim();
+    final resolvedName = (displayName != null && displayName.isNotEmpty)
+        ? displayName
+        : ((fallbackName != null && fallbackName.trim().isNotEmpty)
+              ? fallbackName.trim()
+              : (user.email ?? 'Adventurer'));
+
+    await _firestore.collection('user_profiles').doc(user.uid).set({
+      'uid': user.uid,
+      'email': user.email,
+      'displayName': resolvedName,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
   @override
   Future<AuthResult> signIn({
     required String email,
     required String password,
   }) async {
     try {
-      await _auth.signInWithEmailAndPassword(email: email, password: password);
+      final credential = await _auth.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      final user = credential.user;
+      if (user != null) {
+        await _upsertUserProfile(user);
+      }
       return const AuthResult(success: true);
     } on FirebaseAuthException catch (e) {
       return AuthResult(
@@ -128,6 +157,10 @@ class FirebaseAuthService implements AuthService {
         password: password,
       );
       await credential.user?.updateDisplayName(username);
+      final user = credential.user;
+      if (user != null) {
+        await _upsertUserProfile(user, fallbackName: username);
+      }
       return const AuthResult(success: true);
     } on FirebaseAuthException catch (e) {
       return AuthResult(

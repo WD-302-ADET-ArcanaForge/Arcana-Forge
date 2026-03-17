@@ -6,6 +6,7 @@ import 'package:arcana_forge/widgets/discover_bottom_nav.dart';
 import 'package:arcana_forge/widgets/discover_session_card.dart';
 import 'package:arcana_forge/widgets/discover_stat_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 class DiscoverScreen extends StatefulWidget {
@@ -45,7 +46,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             _sessions
               ..clear()
               ..addAll(
-                snapshot.docs.map((doc) => _SessionItem.fromMap(doc.data())),
+                snapshot.docs.map((doc) => _SessionItem.fromMap(doc.id, doc.data())),
               );
             _isLoadingSessions = false;
             _sessionsError = null;
@@ -70,12 +71,30 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
   int get _activeSessionCount => _sessions.length;
 
+  String? get _currentUserUid => FirebaseAuth.instance.currentUser?.uid;
+
+  List<_SessionItem> get _mySessions {
+    final uid = _currentUserUid;
+    if (uid == null) {
+      return const [];
+    }
+    return _sessions.where((session) => session.createdByUid == uid).toList();
+  }
+
   int get _uniqueVenueCount {
     return _sessions.map((session) => session.venue.toLowerCase().trim()).toSet().length;
   }
 
   Future<void> _openCreateSessionDialog() async {
-    final createdSession = await showDialog<_SessionItem>(
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to create a session.')),
+      );
+      return;
+    }
+
+    final createdSession = await showDialog<_SessionItemDraft>(
       context: context,
       builder: (_) => const _CreateSessionDialog(),
     );
@@ -87,6 +106,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     try {
       await _sessionsRef.add({
         ...createdSession.toJson(),
+        'createdByUid': currentUser.uid,
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -105,6 +125,178 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       final message = e.message ?? 'Unable to save session to Firebase.';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message)),
+      );
+    }
+  }
+
+  Future<void> _openManageSessionsDialog() async {
+    if (_currentUserUid == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to manage your sessions.')),
+      );
+      return;
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF241340),
+      builder: (sheetContext) {
+        final sessions = _mySessions;
+        if (sessions.isEmpty) {
+          return const _StatSheetEmptyState(
+            title: 'Manage Sessions',
+            message: 'You have no sessions yet. Create one first.',
+          );
+        }
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Manage Sessions',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: sessions.length,
+                  separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+                  itemBuilder: (context, index) {
+                    final session = sessions[index];
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        session.name,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      subtitle: Text(
+                        '${session.gameType} • ${session.date} • ${session.venue}',
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined, color: Colors.white70),
+                            onPressed: () async {
+                              Navigator.of(sheetContext).pop();
+                              await _editSession(session);
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                            onPressed: () async {
+                              Navigator.of(sheetContext).pop();
+                              await _deleteSession(session);
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _editSession(_SessionItem session) async {
+    if (session.id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to edit this session.')), 
+      );
+      return;
+    }
+
+    final updated = await showDialog<_SessionItemDraft>(
+      context: context,
+      builder: (_) => _CreateSessionDialog(
+        title: 'Edit Session',
+        submitLabel: 'Save',
+        initialSession: session,
+      ),
+    );
+
+    if (!mounted || updated == null) {
+      return;
+    }
+
+    try {
+      await _sessionsRef.doc(session.id).update(updated.toJson());
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Session "${updated.name}" updated.')),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Unable to update session.')),
+      );
+    }
+  }
+
+  Future<void> _deleteSession(_SessionItem session) async {
+    if (session.id == null) {
+      return;
+    }
+
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF241340),
+        title: const Text('Delete Session', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Delete "${session.name}"?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || shouldDelete != true) {
+      return;
+    }
+
+    try {
+      await _sessionsRef.doc(session.id).delete();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Session "${session.name}" deleted.')),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Unable to delete session.')),
       );
     }
   }
@@ -304,25 +496,48 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                       ],
                     ),
                     const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: FilledButton.icon(
-                        onPressed: _openCreateSessionDialog,
-                        icon: const Icon(Icons.add_circle_outline),
-                        label: const Text('Create Session'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFAA00FF),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          textStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: _openCreateSessionDialog,
+                            icon: const Icon(Icons.add_circle_outline),
+                            label: const Text('Create Session'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFFAA00FF),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              textStyle: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _openManageSessionsDialog,
+                            icon: const Icon(Icons.edit_calendar_outlined),
+                            label: const Text('Manage Sessions'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              side: const BorderSide(color: Color(0xFFAA00FF)),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              textStyle: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 6),
                     const Divider(color: Colors.white12, height: 24),
@@ -369,6 +584,14 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             DiscoverBottomNav(
               selected: _selectedNav,
               onTap: (i) {
+                if (i == 1) {
+                  Navigator.of(context).pushNamed(AppRoutes.maps);
+                  return;
+                }
+                if (i == 2) {
+                  Navigator.of(context).pushNamed(AppRoutes.chat);
+                  return;
+                }
                 if (i == 3) {
                   Navigator.of(context).pushNamed(AppRoutes.profile);
                   return;
@@ -385,6 +608,56 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
 class _SessionItem {
   const _SessionItem({
+    this.id,
+    required this.gameType,
+    required this.sessionType,
+    required this.name,
+    required this.host,
+    required this.date,
+    required this.players,
+    required this.venue,
+    this.createdByUid,
+  });
+
+  final String? id;
+  final String gameType;
+  final String sessionType;
+  final String name;
+  final String host;
+  final String date;
+  final String players;
+  final String venue;
+  final String? createdByUid;
+
+  factory _SessionItem.fromMap(String id, Map<String, dynamic> json) {
+    return _SessionItem(
+      id: id,
+      gameType: (json['gameType'] as String?) ?? 'Unknown',
+      sessionType: (json['sessionType'] as String?) ?? 'Session',
+      name: (json['name'] as String?) ?? 'Untitled Session',
+      host: (json['host'] as String?) ?? 'Unknown Host',
+      date: (json['date'] as String?) ?? 'Date TBD',
+      players: (json['players'] as String?) ?? 'Players TBD',
+      venue: (json['venue'] as String?) ?? 'Venue TBD',
+      createdByUid: json['createdByUid'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'gameType': gameType,
+      'sessionType': sessionType,
+      'name': name,
+      'host': host,
+      'date': date,
+      'players': players,
+      'venue': venue,
+    };
+  }
+}
+
+class _SessionItemDraft {
+  const _SessionItemDraft({
     required this.gameType,
     required this.sessionType,
     required this.name,
@@ -401,18 +674,6 @@ class _SessionItem {
   final String date;
   final String players;
   final String venue;
-
-  factory _SessionItem.fromMap(Map<String, dynamic> json) {
-    return _SessionItem(
-      gameType: (json['gameType'] as String?) ?? 'Unknown',
-      sessionType: (json['sessionType'] as String?) ?? 'Session',
-      name: (json['name'] as String?) ?? 'Untitled Session',
-      host: (json['host'] as String?) ?? 'Unknown Host',
-      date: (json['date'] as String?) ?? 'Date TBD',
-      players: (json['players'] as String?) ?? 'Players TBD',
-      venue: (json['venue'] as String?) ?? 'Venue TBD',
-    );
-  }
 
   Map<String, dynamic> toJson() {
     return {
@@ -464,7 +725,15 @@ class _StatSheetEmptyState extends StatelessWidget {
 }
 
 class _CreateSessionDialog extends StatefulWidget {
-  const _CreateSessionDialog();
+  const _CreateSessionDialog({
+    this.title = 'Create Session',
+    this.submitLabel = 'Create',
+    this.initialSession,
+  });
+
+  final String title;
+  final String submitLabel;
+  final _SessionItem? initialSession;
 
   @override
   State<_CreateSessionDialog> createState() => _CreateSessionDialogState();
@@ -472,14 +741,26 @@ class _CreateSessionDialog extends StatefulWidget {
 
 class _CreateSessionDialogState extends State<_CreateSessionDialog> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _hostController = TextEditingController();
-  final _dateController = TextEditingController();
-  final _playersController = TextEditingController();
-  final _venueController = TextEditingController();
+  late final TextEditingController _nameController;
+  late final TextEditingController _hostController;
+  late final TextEditingController _dateController;
+  late final TextEditingController _playersController;
+  late final TextEditingController _venueController;
 
-  String _selectedGameType = 'DND';
-  String _selectedSessionType = 'Campaign';
+  late String _selectedGameType;
+  late String _selectedSessionType;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedGameType = widget.initialSession?.gameType ?? 'DND';
+    _selectedSessionType = widget.initialSession?.sessionType ?? 'Campaign';
+    _nameController = TextEditingController(text: widget.initialSession?.name ?? '');
+    _hostController = TextEditingController(text: widget.initialSession?.host ?? '');
+    _dateController = TextEditingController(text: widget.initialSession?.date ?? '');
+    _playersController = TextEditingController(text: widget.initialSession?.players ?? '');
+    _venueController = TextEditingController(text: widget.initialSession?.venue ?? '');
+  }
 
   @override
   void dispose() {
@@ -516,9 +797,9 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: const Color(0xFF241340),
-      title: const Text(
-        'Create Session',
-        style: TextStyle(color: Colors.white),
+      title: Text(
+        widget.title,
+        style: const TextStyle(color: Colors.white),
       ),
       content: SingleChildScrollView(
         child: Form(
@@ -637,7 +918,7 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
             }
 
             Navigator.of(context).pop(
-              _SessionItem(
+              _SessionItemDraft(
                 gameType: _selectedGameType,
                 sessionType: _selectedSessionType,
                 name: _nameController.text.trim(),
@@ -648,7 +929,7 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
               ),
             );
           },
-          child: const Text('Create'),
+          child: Text(widget.submitLabel),
         ),
       ],
     );

@@ -1,7 +1,9 @@
 import 'package:arcana_forge/config/app_routes.dart';
 import 'package:arcana_forge/config/firebase_bootstrap.dart';
+import 'package:arcana_forge/screens/chat_screen.dart';
 import 'package:arcana_forge/screens/discover_screen.dart';
 import 'package:arcana_forge/screens/login_screen.dart';
+import 'package:arcana_forge/screens/maps_screen.dart';
 import 'package:arcana_forge/screens/profile_screen.dart';
 import 'package:arcana_forge/screens/signup_screen.dart';
 import 'package:arcana_forge/services/auth_service.dart';
@@ -43,6 +45,14 @@ class ArcanaForgeApp extends StatelessWidget {
           case AppRoutes.discover:
             return MaterialPageRoute<void>(
               builder: (_) => const DiscoverScreen(),
+            );
+          case AppRoutes.maps:
+            return MaterialPageRoute<void>(
+              builder: (_) => const MapsScreen(),
+            );
+          case AppRoutes.chat:
+            return MaterialPageRoute<void>(
+              builder: (_) => const ChatScreen(),
             );
           case AppRoutes.profile:
             return MaterialPageRoute<void>(
