@@ -169,7 +169,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: sessions.length,
-                  separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+                  separatorBuilder: (_, _) => const Divider(color: Colors.white12),
                   itemBuilder: (context, index) {
                     final session = sessions[index];
                     return ListTile(
@@ -332,7 +332,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: _sessions.length,
-                  separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+                  separatorBuilder: (_, _) => const Divider(color: Colors.white12),
                   itemBuilder: (context, index) {
                     final session = _sessions[index];
                     return ListTile(
@@ -397,7 +397,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: venueEntries.length,
-                  separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+                  separatorBuilder: (_, _) => const Divider(color: Colors.white12),
                   itemBuilder: (context, index) {
                     final venue = venueEntries[index];
                     return ListTile(
@@ -808,7 +808,7 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               DropdownButtonFormField<String>(
-                value: _selectedGameType,
+                initialValue: _selectedGameType,
                 dropdownColor: const Color(0xFF2D1B4E),
                 style: const TextStyle(color: Colors.white),
                 decoration: _dialogInputDecoration('Game Type'),
@@ -826,7 +826,7 @@ class _CreateSessionDialogState extends State<_CreateSessionDialog> {
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<String>(
-                value: _selectedSessionType,
+                initialValue: _selectedSessionType,
                 dropdownColor: const Color(0xFF2D1B4E),
                 style: const TextStyle(color: Colors.white),
                 decoration: _dialogInputDecoration('Session Type'),

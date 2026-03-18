@@ -131,7 +131,8 @@ class MapsScreen extends StatelessWidget {
 
                       return ListView.separated(
                         itemCount: venues.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        separatorBuilder: (context, index) =>
+                            const SizedBox(height: 10),
                         itemBuilder: (context, index) {
                           final venue = venues[index];
                           return Material(

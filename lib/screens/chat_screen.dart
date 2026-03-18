@@ -91,7 +91,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         return ListView.separated(
                           controller: scrollController,
                           itemCount: users.length,
-                          separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+                          separatorBuilder: (_, _) => const Divider(color: Colors.white12),
                           itemBuilder: (context, index) {
                             final user = users[index];
                             return ListTile(
@@ -275,7 +275,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           return ListView.separated(
                             padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                             itemCount: conversations.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            separatorBuilder: (_, _) => const SizedBox(height: 8),
                             itemBuilder: (context, index) {
                               final data = conversations[index].data();
                               final names =
