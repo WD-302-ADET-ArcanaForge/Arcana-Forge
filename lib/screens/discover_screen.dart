@@ -20,17 +20,29 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   int _selectedNav = 0;
 
   final List<_SessionItem> _sessions = [];
+  final List<_UserProfileItem> _profiles = [];
+  final TextEditingController _searchController = TextEditingController();
+
+  String _searchQuery = '';
+  _SearchScope _searchScope = _SearchScope.all;
+
   final CollectionReference<Map<String, dynamic>> _sessionsRef =
       FirebaseFirestore.instance.collection('sessions');
+  final CollectionReference<Map<String, dynamic>> _profilesRef =
+      FirebaseFirestore.instance.collection('user_profiles');
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _sessionsSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _profilesSub;
   bool _isLoadingSessions = true;
+  bool _isLoadingProfiles = true;
   String? _sessionsError;
+  String? _profilesError;
 
   @override
   void initState() {
     super.initState();
     _listenToSessions();
+    _listenToProfiles();
   }
 
   void _listenToSessions() {
@@ -63,15 +75,301 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         });
   }
 
+  void _listenToProfiles() {
+    _profilesSub = _profilesRef
+        .orderBy('displayName')
+        .snapshots()
+        .listen((snapshot) {
+          if (!mounted) {
+            return;
+          }
+
+          setState(() {
+            _profiles
+              ..clear()
+              ..addAll(
+                snapshot.docs.map((doc) => _UserProfileItem.fromMap(doc.id, doc.data())),
+              );
+            _isLoadingProfiles = false;
+            _profilesError = null;
+          });
+        }, onError: (_) {
+          if (!mounted) {
+            return;
+          }
+
+          setState(() {
+            _isLoadingProfiles = false;
+            _profilesError = 'Unable to load profiles from Firebase.';
+          });
+        });
+  }
+
   @override
   void dispose() {
+    _searchController.dispose();
     _sessionsSub?.cancel();
+    _profilesSub?.cancel();
     super.dispose();
   }
 
   int get _activeSessionCount => _sessions.length;
 
   String? get _currentUserUid => FirebaseAuth.instance.currentUser?.uid;
+
+  String get _normalizedSearchQuery => _searchQuery.trim().toLowerCase();
+
+  bool get _isSearching => _normalizedSearchQuery.isNotEmpty;
+
+  int get _nearbyPlayersCount {
+    final currentUid = _currentUserUid;
+    return _profiles.where((profile) => profile.uid != null && profile.uid != currentUid).length;
+  }
+
+  List<_SessionItem> get _visibleSessions {
+    if (!_isSearching) {
+      return _sessions;
+    }
+
+    final query = _normalizedSearchQuery;
+    return _sessions.where((session) {
+      return _matchesSearch(session.gameType, query) ||
+          _matchesSearch(session.sessionType, query) ||
+          _matchesSearch(session.name, query) ||
+          _matchesSearch(session.host, query) ||
+          _matchesSearch(session.date, query) ||
+          _matchesSearch(session.players, query) ||
+          _matchesSearch(session.venue, query);
+    }).toList();
+  }
+
+  List<_UserProfileItem> get _visibleProfiles {
+    final currentUid = _currentUserUid;
+    final profiles = _profiles.where((profile) => profile.uid != null && profile.uid != currentUid);
+    if (!_isSearching) {
+      return profiles.toList();
+    }
+
+    final query = _normalizedSearchQuery;
+    return profiles.where((profile) {
+      return _matchesSearch(profile.displayName, query) ||
+          _matchesSearch(profile.email, query) ||
+          _matchesSearch(profile.bio, query) ||
+          profile.favoriteGames.any((game) => _matchesSearch(game, query));
+    }).toList();
+  }
+
+  bool _matchesSearch(String value, String query) {
+    return value.toLowerCase().contains(query);
+  }
+
+  String _conversationIdFor(String uid1, String uid2) {
+    final sorted = [uid1, uid2]..sort();
+    return '${sorted[0]}__${sorted[1]}';
+  }
+
+  bool get _shouldShowProfilesInSearch {
+    return _searchScope == _SearchScope.all || _searchScope == _SearchScope.profiles;
+  }
+
+  bool get _shouldShowSessionsInSearch {
+    return _searchScope == _SearchScope.all || _searchScope == _SearchScope.sessions;
+  }
+
+  bool get _isSearchLoading {
+    if (_searchScope == _SearchScope.profiles) {
+      return _isLoadingProfiles;
+    }
+
+    if (_searchScope == _SearchScope.sessions) {
+      return _isLoadingSessions;
+    }
+
+    return _isLoadingProfiles || _isLoadingSessions;
+  }
+
+  bool get _hasSearchResults {
+    if (_searchScope == _SearchScope.profiles) {
+      return _visibleProfiles.isNotEmpty;
+    }
+
+    if (_searchScope == _SearchScope.sessions) {
+      return _visibleSessions.isNotEmpty;
+    }
+
+    return _visibleProfiles.isNotEmpty || _visibleSessions.isNotEmpty;
+  }
+
+  String get _searchEmptyMessage {
+    if (_searchScope == _SearchScope.profiles) {
+      return 'No profiles match your search.';
+    }
+
+    if (_searchScope == _SearchScope.sessions) {
+      return 'No sessions match your search.';
+    }
+
+    return 'No profiles or sessions match your search.';
+  }
+
+  Future<void> _startConversationWithProfile(_UserProfileItem profile) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to start a direct message.')),
+      );
+      return;
+    }
+
+    if (profile.uid == null || profile.uid == currentUser.uid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to start a message with this profile.')),
+      );
+      return;
+    }
+
+    final currentName = currentUser.displayName?.trim();
+    final safeCurrentName = (currentName != null && currentName.isNotEmpty)
+        ? currentName
+        : (currentUser.email ?? 'Adventurer');
+
+    final conversationId = _conversationIdFor(currentUser.uid, profile.uid!);
+
+    try {
+      await FirebaseFirestore.instance.collection('direct_conversations').doc(conversationId).set({
+        'participants': [currentUser.uid, profile.uid],
+        'participantNames': {
+          currentUser.uid: safeCurrentName,
+          profile.uid: profile.displayName,
+        },
+        'participantEmails': {
+          currentUser.uid: currentUser.email,
+          profile.uid: profile.email,
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+        'lastMessage': '',
+      }, SetOptions(merge: true));
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.of(context).pushNamed(AppRoutes.chat);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Conversation with ${profile.displayName} started.')),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Unable to start direct message.')),
+      );
+    }
+  }
+
+  void _openProfilePreview(_UserProfileItem profile) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF241340),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: const Color(0xFFAA00FF),
+                    child: Text(
+                      profile.displayName.isNotEmpty ? profile.displayName[0].toUpperCase() : '?',
+                      style: const TextStyle(color: Colors.white, fontSize: 20),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          profile.displayName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          profile.email,
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              if (profile.bio.isNotEmpty) ...[
+                const Text(
+                  'Bio',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  profile.bio,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 12),
+              ],
+              const Text(
+                'Favorite Games',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              if (profile.favoriteGames.isEmpty)
+                const Text(
+                  'No favorite games listed yet.',
+                  style: TextStyle(color: Colors.white70),
+                )
+              else
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: profile.favoriteGames
+                      .map(
+                        (game) => Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF2D1B4E),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFAA00FF).withValues(alpha: 0.5)),
+                          ),
+                          child: Text(
+                            game,
+                            style: const TextStyle(color: Colors.white, fontSize: 12),
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   List<_SessionItem> get _mySessions {
     final uid = _currentUserUid;
@@ -438,6 +736,53 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                     const SizedBox(height: 16),
                     const ArcanaLogo(titleSize: 44),
                     const SizedBox(height: 20),
+                    if (_isSearching)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: SegmentedButton<_SearchScope>(
+                          segments: const [
+                            ButtonSegment<_SearchScope>(
+                              value: _SearchScope.all,
+                              label: Text('All'),
+                              icon: Icon(Icons.grid_view_rounded, size: 16),
+                            ),
+                            ButtonSegment<_SearchScope>(
+                              value: _SearchScope.profiles,
+                              label: Text('Profiles'),
+                              icon: Icon(Icons.person_outline, size: 16),
+                            ),
+                            ButtonSegment<_SearchScope>(
+                              value: _SearchScope.sessions,
+                              label: Text('Sessions'),
+                              icon: Icon(Icons.event_note_outlined, size: 16),
+                            ),
+                          ],
+                          selected: {_searchScope},
+                          onSelectionChanged: (selection) {
+                            setState(() {
+                              _searchScope = selection.first;
+                            });
+                          },
+                          showSelectedIcon: false,
+                          style: ButtonStyle(
+                            foregroundColor: WidgetStateProperty.resolveWith((states) {
+                              if (states.contains(WidgetState.selected)) {
+                                return Colors.white;
+                              }
+                              return Colors.white70;
+                            }),
+                            backgroundColor: WidgetStateProperty.resolveWith((states) {
+                              if (states.contains(WidgetState.selected)) {
+                                return const Color(0xFFAA00FF);
+                              }
+                              return const Color(0xFF2D1B4E);
+                            }),
+                            side: WidgetStateProperty.all(
+                              const BorderSide(color: Color(0xFFAA00FF), width: 1),
+                            ),
+                          ),
+                        ),
+                      ),
                     Row(
                       children: [
                         Expanded(
@@ -446,12 +791,23 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                               color: const Color(0xFF2D1B4E),
                               borderRadius: BorderRadius.circular(30),
                             ),
-                            child: const TextField(
+                            child: TextField(
+                              controller: _searchController,
+                              onChanged: (value) => setState(() => _searchQuery = value),
                               style: TextStyle(color: Colors.white),
                               decoration: InputDecoration(
                                 hintText: 'Search games, events, players...',
                                 hintStyle: TextStyle(color: Colors.white54),
                                 prefixIcon: Icon(Icons.search, color: Colors.white54),
+                                suffixIcon: _searchQuery.trim().isEmpty
+                                    ? null
+                                    : IconButton(
+                                        onPressed: () {
+                                          _searchController.clear();
+                                          setState(() => _searchQuery = '');
+                                        },
+                                        icon: const Icon(Icons.close, color: Colors.white54),
+                                      ),
                                 border: InputBorder.none,
                                 contentPadding: EdgeInsets.symmetric(vertical: 14),
                               ),
@@ -481,9 +837,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                           onTap: _showActiveSessionsSheet,
                         ),
                         const SizedBox(width: 10),
-                        const DiscoverStatCard(
+                        DiscoverStatCard(
                           label: 'Nearby Players',
-                          value: '24',
+                          value: '$_nearbyPlayersCount',
                           icon: Icons.person_outline,
                         ),
                         const SizedBox(width: 10),
@@ -549,33 +905,208 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                           style: const TextStyle(color: Colors.redAccent),
                         ),
                       ),
-                    if (_isLoadingSessions)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: Center(child: CircularProgressIndicator()),
-                      ),
-                    if (!_isLoadingSessions && _sessions.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Text(
-                          'No sessions yet. Create one to get started.',
-                          style: TextStyle(color: Colors.white70),
+                    if (_isSearching)
+                      ...[
+                        if (_profilesError != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Text(
+                              _profilesError!,
+                              style: const TextStyle(color: Colors.redAccent),
+                            ),
+                          ),
+                        if (_isSearchLoading)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 24),
+                            child: Center(child: CircularProgressIndicator()),
+                          )
+                        else if (!_hasSearchResults)
+                          Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Text(
+                              _searchEmptyMessage,
+                              style: TextStyle(color: Colors.white70),
+                            ),
+                          )
+                        else ...[
+                          if (_shouldShowProfilesInSearch && _visibleProfiles.isNotEmpty) ...[
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 10),
+                              child: Text(
+                                'Profiles',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            ..._visibleProfiles.map(
+                              (profile) => Container(
+                                margin: const EdgeInsets.only(bottom: 10),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2D1B4E),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 18,
+                                      backgroundColor: const Color(0xFFAA00FF),
+                                      child: Text(
+                                        profile.displayName.isNotEmpty
+                                            ? profile.displayName[0].toUpperCase()
+                                            : '?',
+                                        style: const TextStyle(color: Colors.white),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            profile.displayName,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 15,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            profile.email,
+                                            style: const TextStyle(
+                                              color: Colors.white70,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                          if (profile.bio.isNotEmpty)
+                                            Padding(
+                                              padding: const EdgeInsets.only(top: 6),
+                                              child: Text(
+                                                profile.bio,
+                                                style: const TextStyle(
+                                                  color: Colors.white60,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                          if (profile.favoriteGames.isNotEmpty)
+                                            Padding(
+                                              padding: const EdgeInsets.only(top: 6),
+                                              child: Text(
+                                                'Games: ${profile.favoriteGames.join(', ')}',
+                                                style: const TextStyle(
+                                                  color: Colors.white60,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                          const SizedBox(height: 8),
+                                          Row(
+                                            children: [
+                                              OutlinedButton.icon(
+                                                onPressed: () => _openProfilePreview(profile),
+                                                icon: const Icon(Icons.visibility_outlined, size: 16),
+                                                label: const Text('View'),
+                                                style: OutlinedButton.styleFrom(
+                                                  foregroundColor: Colors.white,
+                                                  side: const BorderSide(color: Color(0xFFAA00FF)),
+                                                  padding: const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 8,
+                                                  ),
+                                                  visualDensity: VisualDensity.compact,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              FilledButton.icon(
+                                                onPressed: () => _startConversationWithProfile(profile),
+                                                icon: const Icon(Icons.chat_bubble_outline, size: 16),
+                                                label: const Text('Message'),
+                                                style: FilledButton.styleFrom(
+                                                  backgroundColor: const Color(0xFFAA00FF),
+                                                  foregroundColor: Colors.white,
+                                                  padding: const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 8,
+                                                  ),
+                                                  visualDensity: VisualDensity.compact,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            if (_shouldShowSessionsInSearch && _visibleSessions.isNotEmpty)
+                              const SizedBox(height: 10),
+                          ],
+                          if (_shouldShowSessionsInSearch && _visibleSessions.isNotEmpty) ...[
+                            const Padding(
+                              padding: EdgeInsets.only(bottom: 10),
+                              child: Text(
+                                'Sessions',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            ..._visibleSessions.map(
+                              (session) => Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: DiscoverSessionCard(
+                                  gameType: session.gameType,
+                                  sessionType: session.sessionType,
+                                  name: session.name,
+                                  host: session.host,
+                                  date: session.date,
+                                  players: session.players,
+                                  venue: session.venue,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ]
+                    else ...[
+                      if (_isLoadingSessions)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 24),
+                          child: Center(child: CircularProgressIndicator()),
+                        ),
+                      if (!_isLoadingSessions && _sessions.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Text(
+                            'No sessions yet. Create one to get started.',
+                            style: TextStyle(color: Colors.white70),
+                          ),
+                        ),
+                      ..._sessions.map(
+                        (session) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: DiscoverSessionCard(
+                            gameType: session.gameType,
+                            sessionType: session.sessionType,
+                            name: session.name,
+                            host: session.host,
+                            date: session.date,
+                            players: session.players,
+                            venue: session.venue,
+                          ),
                         ),
                       ),
-                    ..._sessions.map(
-                      (session) => Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: DiscoverSessionCard(
-                          gameType: session.gameType,
-                          sessionType: session.sessionType,
-                          name: session.name,
-                          host: session.host,
-                          date: session.date,
-                          players: session.players,
-                          venue: session.venue,
-                        ),
-                      ),
-                    ),
+                    ],
                     const SizedBox(height: 20),
                   ],
                 ),
@@ -654,6 +1185,48 @@ class _SessionItem {
       'venue': venue,
     };
   }
+}
+
+class _UserProfileItem {
+  const _UserProfileItem({
+    required this.uid,
+    required this.displayName,
+    required this.email,
+    required this.bio,
+    required this.favoriteGames,
+  });
+
+  final String? uid;
+  final String displayName;
+  final String email;
+  final String bio;
+  final List<String> favoriteGames;
+
+  factory _UserProfileItem.fromMap(String docId, Map<String, dynamic> json) {
+    final displayName = (json['displayName'] as String?)?.trim();
+    final email = (json['email'] as String?)?.trim();
+    final bio = (json['bio'] as String?)?.trim();
+    final favoriteGames = (json['favoriteGames'] as List<dynamic>?)
+            ?.whereType<String>()
+            .map((entry) => entry.trim())
+            .where((entry) => entry.isNotEmpty)
+            .toList() ??
+        const [];
+
+    return _UserProfileItem(
+      uid: (json['uid'] as String?) ?? docId,
+      displayName: (displayName != null && displayName.isNotEmpty) ? displayName : 'Adventurer',
+      email: (email != null && email.isNotEmpty) ? email : 'No email available',
+      bio: bio ?? '',
+      favoriteGames: favoriteGames,
+    );
+  }
+}
+
+enum _SearchScope {
+  all,
+  profiles,
+  sessions,
 }
 
 class _SessionItemDraft {

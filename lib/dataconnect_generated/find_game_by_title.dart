@@ -60,7 +60,7 @@ class FindGameByTitleGames {
     return json;
   }
 
-  const FindGameByTitleGames({
+  FindGameByTitleGames({
     required this.id,
     required this.title,
     required this.publisher,
@@ -99,7 +99,7 @@ class FindGameByTitleData {
     return json;
   }
 
-  const FindGameByTitleData({
+  FindGameByTitleData({
     required this.games,
   });
 }
@@ -134,7 +134,7 @@ class FindGameByTitleVariables {
     return json;
   }
 
-  const FindGameByTitleVariables({
+  FindGameByTitleVariables({
     required this.title,
   });
 }
