@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:arcana_forge/config/app_routes.dart';
 import 'package:arcana_forge/widgets/arcana_logo.dart';
@@ -8,6 +9,10 @@ import 'package:arcana_forge/widgets/discover_stat_card.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+part 'discover_models.dart';
+part 'discover_dialogs.dart';
 
 class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({super.key});
@@ -20,11 +25,16 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   int _selectedNav = 0;
 
   final List<_SessionItem> _sessions = [];
+  final List<_SessionItem> _endedSessions = [];
   final List<_UserProfileItem> _profiles = [];
   final TextEditingController _searchController = TextEditingController();
 
   String _searchQuery = '';
   _SearchScope _searchScope = _SearchScope.all;
+  Set<String> _selectedGameTypeFilters = {};
+  Set<String> _selectedSessionTypeFilters = {};
+  Set<String> _selectedVenueTypeFilters = {};
+  bool _onlyJoinableSessions = false;
 
   final CollectionReference<Map<String, dynamic>> _sessionsRef =
       FirebaseFirestore.instance.collection('sessions');
@@ -54,11 +64,20 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             return;
           }
 
+          final allSessions = snapshot.docs
+              .map((doc) => _SessionItem.fromMap(doc.id, doc.data()))
+              .toList();
+
           setState(() {
             _sessions
               ..clear()
               ..addAll(
-                snapshot.docs.map((doc) => _SessionItem.fromMap(doc.id, doc.data())),
+                allSessions.where((session) => session.isActive),
+              );
+            _endedSessions
+              ..clear()
+              ..addAll(
+                allSessions.where((session) => !session.isActive),
               );
             _isLoadingSessions = false;
             _sessionsError = null;
@@ -121,18 +140,92 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
   bool get _isSearching => _normalizedSearchQuery.isNotEmpty;
 
-  int get _nearbyPlayersCount {
-    final currentUid = _currentUserUid;
-    return _profiles.where((profile) => profile.uid != null && profile.uid != currentUid).length;
+  int get _activeFilterCount {
+    final joinableCount = _onlyJoinableSessions ? 1 : 0;
+    return _selectedGameTypeFilters.length +
+        _selectedSessionTypeFilters.length +
+        _selectedVenueTypeFilters.length +
+        joinableCount;
+  }
+
+  bool get _hasActiveFilters => _activeFilterCount > 0;
+
+  List<String> get _availableGameTypeFilters {
+    final values = _sessions
+        .map((session) => session.gameType.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return values;
+  }
+
+  List<String> get _availableSessionTypeFilters {
+    final values = _sessions
+        .map((session) => session.sessionType.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return values;
+  }
+
+  List<String> get _availableVenueTypeFilters {
+    final values = _sessions
+        .map((session) => session.venueType.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return values;
+  }
+
+  String _labelForVenueType(String type) {
+    switch (type) {
+      case 'online':
+        return 'Online';
+      case 'hybrid':
+        return 'Hybrid';
+      case 'in_person':
+      default:
+        return 'In-Person';
+    }
+  }
+
+  bool _sessionMatchesFilters(_SessionItem session) {
+    if (_selectedGameTypeFilters.isNotEmpty &&
+        !_selectedGameTypeFilters.contains(session.gameType)) {
+      return false;
+    }
+
+    if (_selectedSessionTypeFilters.isNotEmpty &&
+        !_selectedSessionTypeFilters.contains(session.sessionType)) {
+      return false;
+    }
+
+    if (_selectedVenueTypeFilters.isNotEmpty &&
+        !_selectedVenueTypeFilters.contains(session.venueType)) {
+      return false;
+    }
+
+    if (_onlyJoinableSessions) {
+      if (!_isJoinEnabledFor(session)) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   List<_SessionItem> get _visibleSessions {
+    final filteredSessions = _sessions.where(_sessionMatchesFilters).toList();
+
     if (!_isSearching) {
-      return _sessions;
+      return filteredSessions;
     }
 
     final query = _normalizedSearchQuery;
-    return _sessions.where((session) {
+    return filteredSessions.where((session) {
       return _matchesSearch(session.gameType, query) ||
           _matchesSearch(session.sessionType, query) ||
           _matchesSearch(session.name, query) ||
@@ -163,9 +256,224 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     return value.toLowerCase().contains(query);
   }
 
+  String _normalizeProvince(String value) {
+    return value.trim().toLowerCase();
+  }
+
+  String? get _currentUserProvince {
+    final uid = _currentUserUid;
+    if (uid == null) {
+      return null;
+    }
+
+    for (final profile in _profiles) {
+      if (profile.uid != uid) {
+        continue;
+      }
+
+      final province = profile.province.trim();
+      if (province.isEmpty) {
+        return null;
+      }
+      return province;
+    }
+
+    return null;
+  }
+
+  List<_SessionItem> get _sessionsInCurrentProvince {
+    final province = _currentUserProvince;
+    if (province == null) {
+      return const [];
+    }
+
+    final normalizedProvince = _normalizeProvince(province);
+    return _sessions.where((session) {
+      final sessionProvince = _normalizeProvince(session.province);
+      if (sessionProvince.isEmpty) {
+        return false;
+      }
+      return sessionProvince == normalizedProvince;
+    }).toList();
+  }
+
   String _conversationIdFor(String uid1, String uid2) {
     final sorted = [uid1, uid2]..sort();
     return '${sorted[0]}__${sorted[1]}';
+  }
+
+  int? _extractMaxPlayers(String playersText) {
+    final matches = RegExp(r'\d+').allMatches(playersText);
+    if (matches.isEmpty) {
+      return null;
+    }
+
+    final values = matches
+        .map((match) => int.tryParse(match.group(0) ?? ''))
+        .whereType<int>()
+        .toList();
+
+    if (values.isEmpty) {
+      return null;
+    }
+
+    values.sort();
+    return values.last;
+  }
+
+  bool _isJoinedByCurrentUser(_SessionItem session) {
+    final uid = _currentUserUid;
+    if (uid == null) {
+      return false;
+    }
+    return session.joinedUids.contains(uid);
+  }
+
+  bool _isSessionFull(_SessionItem session) {
+    final maxPlayers = session.maxPlayers;
+    if (maxPlayers == null) {
+      return false;
+    }
+    return session.joinedUids.length >= maxPlayers;
+  }
+
+  String _playersLabelFor(_SessionItem session) {
+    final maxPlayers = session.maxPlayers;
+    if (maxPlayers == null) {
+      return session.players;
+    }
+
+    return '${session.joinedUids.length}/$maxPlayers players';
+  }
+
+  String _venueLabelFor(_SessionItem session) {
+    switch (session.venueType) {
+      case 'online':
+        return 'Online: ${session.venue}';
+      case 'hybrid':
+        return 'Hybrid: ${session.venue}';
+      case 'in_person':
+      default:
+        return session.venue;
+    }
+  }
+
+  String _joinButtonLabelFor(_SessionItem session) {
+    if (_isJoinedByCurrentUser(session)) {
+      return 'Joined';
+    }
+
+    if (_isSessionFull(session)) {
+      return 'Session Full';
+    }
+
+    return 'Join Session >';
+  }
+
+  bool _isJoinEnabledFor(_SessionItem session) {
+    final uid = _currentUserUid;
+    if (uid == null) {
+      return false;
+    }
+
+    return !_isJoinedByCurrentUser(session) && !_isSessionFull(session);
+  }
+
+  Future<void> _joinSession(_SessionItem session) async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to join a session.')),
+      );
+      return;
+    }
+
+    final sessionId = session.id;
+    if (sessionId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to join this session.')),
+      );
+      return;
+    }
+
+    _JoinSessionResult result = _JoinSessionResult.failed;
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final sessionDoc = _sessionsRef.doc(sessionId);
+        final snapshot = await transaction.get(sessionDoc);
+
+        if (!snapshot.exists) {
+          result = _JoinSessionResult.notFound;
+          return;
+        }
+
+        final data = snapshot.data() ?? <String, dynamic>{};
+        final joinedUids = ((data['joinedUids'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<String>()
+            .toList();
+
+        if (joinedUids.contains(currentUser.uid)) {
+          result = _JoinSessionResult.alreadyJoined;
+          return;
+        }
+
+        final playersText = (data['players'] as String?) ?? '';
+        final maxPlayers = (data['maxPlayers'] as int?) ?? _extractMaxPlayers(playersText);
+
+        if (maxPlayers != null && joinedUids.length >= maxPlayers) {
+          result = _JoinSessionResult.full;
+          return;
+        }
+
+        joinedUids.add(currentUser.uid);
+        transaction.update(sessionDoc, {
+          'joinedUids': joinedUids,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        result = _JoinSessionResult.joined;
+      });
+    } on FirebaseException catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Unable to join session.')),
+      );
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    switch (result) {
+      case _JoinSessionResult.joined:
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('You joined "${session.name}".')),
+        );
+        break;
+      case _JoinSessionResult.alreadyJoined:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You already joined this session.')),
+        );
+        break;
+      case _JoinSessionResult.full:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('This session is full.')),
+        );
+        break;
+      case _JoinSessionResult.notFound:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Session no longer exists.')),
+        );
+        break;
+      case _JoinSessionResult.failed:
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to join session.')),
+        );
+        break;
+    }
   }
 
   bool get _shouldShowProfilesInSearch {
@@ -210,6 +518,35 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     }
 
     return 'No profiles or sessions match your search.';
+  }
+
+  Future<void> _openFilterSheet() async {
+    final result = await showModalBottomSheet<_DiscoverFilterDraft>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF241340),
+      builder: (_) => _DiscoverFilterSheet(
+        selectedGameTypes: _selectedGameTypeFilters,
+        selectedSessionTypes: _selectedSessionTypeFilters,
+        selectedVenueTypes: _selectedVenueTypeFilters,
+        onlyJoinableSessions: _onlyJoinableSessions,
+        availableGameTypes: _availableGameTypeFilters,
+        availableSessionTypes: _availableSessionTypeFilters,
+        availableVenueTypes: _availableVenueTypeFilters,
+        venueTypeLabelBuilder: _labelForVenueType,
+      ),
+    );
+
+    if (!mounted || result == null) {
+      return;
+    }
+
+    setState(() {
+      _selectedGameTypeFilters = result.gameTypes;
+      _selectedSessionTypeFilters = result.sessionTypes;
+      _selectedVenueTypeFilters = result.venueTypes;
+      _onlyJoinableSessions = result.onlyJoinable;
+    });
   }
 
   Future<void> _startConversationWithProfile(_UserProfileItem profile) async {
@@ -379,8 +716,259 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     return _sessions.where((session) => session.createdByUid == uid).toList();
   }
 
+  List<_SessionItem> get _myEndedSessions {
+    final uid = _currentUserUid;
+    if (uid == null) {
+      return const [];
+    }
+    return _endedSessions.where((session) => session.createdByUid == uid).toList();
+  }
+
   int get _uniqueVenueCount {
-    return _sessions.map((session) => session.venue.toLowerCase().trim()).toSet().length;
+    return _sessionsInCurrentProvince
+        .map((session) => session.venue.toLowerCase().trim())
+        .toSet()
+        .length;
+  }
+
+  List<String> get _knownVenueSuggestions {
+    final seen = <String>{};
+    final suggestions = <String>[];
+
+    for (final session in [..._sessions, ..._endedSessions]) {
+      final venue = session.venue.trim();
+      if (venue.isEmpty) {
+        continue;
+      }
+
+      final key = venue.toLowerCase();
+      if (seen.add(key)) {
+        suggestions.add(venue);
+      }
+    }
+
+    suggestions.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return suggestions;
+  }
+
+  String _displayNameForUid(String uid) {
+    for (final profile in _profiles) {
+      if (profile.uid == uid) {
+        return profile.displayName;
+      }
+    }
+    return 'Player';
+  }
+
+  Future<void> _kickPlayerFromSession({
+    required _SessionItem session,
+    required String playerUid,
+  }) async {
+    final currentUserUid = _currentUserUid;
+    if (currentUserUid == null || session.createdByUid != currentUserUid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Only the host can manage players.')),
+      );
+      return;
+    }
+
+    if (session.id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to update this session.')),
+      );
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final sessionDoc = _sessionsRef.doc(session.id);
+        final snapshot = await transaction.get(sessionDoc);
+        if (!snapshot.exists) {
+          return;
+        }
+
+        final data = snapshot.data() ?? <String, dynamic>{};
+        final hostUid = data['createdByUid'] as String?;
+        if (hostUid != currentUserUid) {
+          return;
+        }
+
+        final joinedUids = ((data['joinedUids'] as List<dynamic>?) ?? const <dynamic>[])
+            .whereType<String>()
+            .toList();
+
+        if (playerUid == hostUid) {
+          return;
+        }
+
+        if (!joinedUids.contains(playerUid)) {
+          return;
+        }
+
+        joinedUids.remove(playerUid);
+
+        transaction.update(sessionDoc, {
+          'joinedUids': joinedUids,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${_displayNameForUid(playerUid)} was removed.')),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Unable to remove player.')),
+      );
+    }
+  }
+
+  void _openManagePlayersSheet(_SessionItem session) {
+    final currentUserUid = _currentUserUid;
+    if (currentUserUid == null || session.createdByUid != currentUserUid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Only the host can manage players.')),
+      );
+      return;
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF241340),
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final currentSession = _sessions.firstWhere(
+              (item) => item.id == session.id,
+              orElse: () => session,
+            );
+
+            final removablePlayers = currentSession.joinedUids
+                .where((uid) => uid != currentSession.createdByUid)
+                .toList();
+
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Manage Players: ${currentSession.name}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  if (removablePlayers.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'No joined players to remove.',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    )
+                  else
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: removablePlayers.length,
+                        separatorBuilder: (_, _) => const Divider(color: Colors.white12),
+                        itemBuilder: (context, index) {
+                          final playerUid = removablePlayers[index];
+                          final displayName = _displayNameForUid(playerUid);
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: CircleAvatar(
+                              backgroundColor: const Color(0xFFAA00FF),
+                              child: Text(
+                                displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                            title: Text(
+                              displayName,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                            subtitle: Text(
+                              playerUid,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                            ),
+                            trailing: TextButton.icon(
+                              onPressed: () async {
+                                final shouldKick = await showDialog<bool>(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    backgroundColor: const Color(0xFF241340),
+                                    title: const Text(
+                                      'Remove Player',
+                                      style: TextStyle(color: Colors.white),
+                                    ),
+                                    content: Text(
+                                      'Remove $displayName from this session?',
+                                      style: const TextStyle(color: Colors.white70),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.of(context).pop(false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      FilledButton(
+                                        onPressed: () => Navigator.of(context).pop(true),
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: Colors.redAccent,
+                                        ),
+                                        child: const Text('Remove'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+
+                                if (shouldKick != true) {
+                                  return;
+                                }
+
+                                await _kickPlayerFromSession(
+                                  session: currentSession,
+                                  playerUid: playerUid,
+                                );
+
+                                if (!mounted) {
+                                  return;
+                                }
+
+                                setModalState(() {});
+                              },
+                              icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent),
+                              label: const Text(
+                                'Kick',
+                                style: TextStyle(color: Colors.redAccent),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _openCreateSessionDialog() async {
@@ -394,7 +982,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
     final createdSession = await showDialog<_SessionItemDraft>(
       context: context,
-      builder: (_) => const _CreateSessionDialog(),
+      builder: (_) => _CreateSessionDialog(
+        venueSuggestions: _knownVenueSuggestions,
+      ),
     );
 
     if (!mounted || createdSession == null) {
@@ -402,8 +992,14 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     }
 
     try {
+      final maxPlayers = _extractMaxPlayers(createdSession.players);
+
       await _sessionsRef.add({
         ...createdSession.toJson(),
+        'maxPlayers': maxPlayers,
+        'joinedUids': [currentUser.uid],
+        'isActive': true,
+        'province': createdSession.province,
         'createdByUid': currentUser.uid,
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -470,6 +1066,10 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   separatorBuilder: (_, _) => const Divider(color: Colors.white12),
                   itemBuilder: (context, index) {
                     final session = sessions[index];
+                    final joinedCount = session.joinedUids.length;
+                    final capacityLabel = session.maxPlayers == null
+                        ? '$joinedCount joined'
+                        : '$joinedCount/${session.maxPlayers} joined';
                     return ListTile(
                       contentPadding: EdgeInsets.zero,
                       title: Text(
@@ -477,12 +1077,20 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                         style: const TextStyle(color: Colors.white),
                       ),
                       subtitle: Text(
-                        '${session.gameType} • ${session.date} • ${session.venue}',
+                        '${session.gameType} • ${session.date} • ${_venueLabelFor(session)}\n$capacityLabel',
                         style: const TextStyle(color: Colors.white70),
                       ),
+                      isThreeLine: true,
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
+                          IconButton(
+                            icon: const Icon(Icons.group_outlined, color: Colors.white70),
+                            onPressed: () {
+                              Navigator.of(sheetContext).pop();
+                              _openManagePlayersSheet(session);
+                            },
+                          ),
                           IconButton(
                             icon: const Icon(Icons.edit_outlined, color: Colors.white70),
                             onPressed: () async {
@@ -491,14 +1099,93 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                             },
                           ),
                           IconButton(
-                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                            icon: const Icon(Icons.stop_circle_outlined, color: Colors.redAccent),
                             onPressed: () async {
                               Navigator.of(sheetContext).pop();
-                              await _deleteSession(session);
+                              await _endSession(session);
                             },
+                            tooltip: 'End Session',
                           ),
                         ],
                       ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () {
+                    Navigator.of(sheetContext).pop();
+                    _openEndedSessionsSheet();
+                  },
+                  icon: const Icon(Icons.history, color: Colors.white70),
+                  label: Text(
+                    _myEndedSessions.isEmpty
+                        ? 'View Ended Sessions'
+                        : 'View Ended Sessions (${_myEndedSessions.length})',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _openEndedSessionsSheet() {
+    final endedSessions = _myEndedSessions;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF241340),
+      builder: (_) {
+        if (endedSessions.isEmpty) {
+          return const _StatSheetEmptyState(
+            title: 'Ended Sessions',
+            message: 'You have not ended any sessions yet.',
+          );
+        }
+
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Ended Sessions',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: endedSessions.length,
+                  separatorBuilder: (_, _) => const Divider(color: Colors.white12),
+                  itemBuilder: (context, index) {
+                    final session = endedSessions[index];
+                    final joinedCount = session.joinedUids.length;
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.stop_circle_outlined, color: Colors.redAccent),
+                      title: Text(
+                        session.name,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      subtitle: Text(
+                        '${session.gameType} • ${session.date} • ${_venueLabelFor(session)}\n$joinedCount joined',
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      isThreeLine: true,
                     );
                   },
                 ),
@@ -524,6 +1211,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
         title: 'Edit Session',
         submitLabel: 'Save',
         initialSession: session,
+        venueSuggestions: _knownVenueSuggestions,
       ),
     );
 
@@ -532,7 +1220,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     }
 
     try {
-      await _sessionsRef.doc(session.id).update(updated.toJson());
+      await _sessionsRef.doc(session.id).update({
+        ...updated.toJson(),
+        'maxPlayers': _extractMaxPlayers(updated.players),
+        'province': updated.province,
+      });
       if (!mounted) {
         return;
       }
@@ -549,7 +1241,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     }
   }
 
-  Future<void> _deleteSession(_SessionItem session) async {
+  Future<void> _endSession(_SessionItem session) async {
     if (session.id == null) {
       return;
     }
@@ -558,9 +1250,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF241340),
-        title: const Text('Delete Session', style: TextStyle(color: Colors.white)),
+        title: const Text('End Session', style: TextStyle(color: Colors.white)),
         content: Text(
-          'Delete "${session.name}"?',
+          'End "${session.name}"? This hides it from active discover lists.',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -571,7 +1263,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            child: const Text('Delete'),
+            child: const Text('End Session'),
           ),
         ],
       ),
@@ -582,19 +1274,23 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     }
 
     try {
-      await _sessionsRef.doc(session.id).delete();
+      await _sessionsRef.doc(session.id).update({
+        'isActive': false,
+        'endedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
       if (!mounted) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Session "${session.name}" deleted.')),
+        SnackBar(content: Text('Session "${session.name}" ended.')),
       );
     } on FirebaseException catch (e) {
       if (!mounted) {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Unable to delete session.')),
+        SnackBar(content: Text(e.message ?? 'Unable to end session.')),
       );
     }
   }
@@ -640,7 +1336,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                         style: const TextStyle(color: Colors.white),
                       ),
                       subtitle: Text(
-                        '${session.gameType} • ${session.date} • ${session.venue}',
+                        '${session.gameType} • ${session.date} • ${_venueLabelFor(session)}',
                         style: const TextStyle(color: Colors.white70),
                       ),
                       trailing: const Icon(Icons.chevron_right, color: Colors.white54),
@@ -657,7 +1353,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
   void _showGameVenuesSheet() {
     final venues = <String, int>{};
-    for (final session in _sessions) {
+    for (final session in _sessionsInCurrentProvince) {
       final venue = session.venue.trim();
       venues[venue] = (venues[venue] ?? 0) + 1;
     }
@@ -666,10 +1362,18 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       context: context,
       backgroundColor: const Color(0xFF241340),
       builder: (context) {
-        if (venues.isEmpty) {
+        final province = _currentUserProvince;
+        if (province == null) {
           return const _StatSheetEmptyState(
-            title: 'Game Venues',
-            message: 'No venues yet. Create a session to add one.',
+            title: 'Nearby Venues',
+            message: 'Set your province in your profile to see nearby venues.',
+          );
+        }
+
+        if (venues.isEmpty) {
+          return _StatSheetEmptyState(
+            title: 'Nearby Venues',
+            message: 'No venues found in $province yet.',
           );
         }
 
@@ -683,12 +1387,17 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Game Venues',
+                'Nearby Venues',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
                 ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Province: $province',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
               ),
               const SizedBox(height: 10),
               Flexible(
@@ -815,14 +1524,45 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                           ),
                         ),
                         const SizedBox(width: 10),
-                        Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFAA00FF),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: const Icon(Icons.filter_alt, color: Colors.white),
+                        Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Material(
+                              color: _hasActiveFilters
+                                  ? const Color(0xFFD62EEA)
+                                  : const Color(0xFFAA00FF),
+                              borderRadius: BorderRadius.circular(14),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: _openFilterSheet,
+                                child: const SizedBox(
+                                  width: 48,
+                                  height: 48,
+                                  child: Icon(Icons.filter_alt, color: Colors.white),
+                                ),
+                              ),
+                            ),
+                            if (_activeFilterCount > 0)
+                              Positioned(
+                                right: -4,
+                                top: -6,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    '$_activeFilterCount',
+                                    style: const TextStyle(
+                                      color: Color(0xFF4F1A7C),
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ],
                     ),
@@ -838,13 +1578,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                         ),
                         const SizedBox(width: 10),
                         DiscoverStatCard(
-                          label: 'Nearby Players',
-                          value: '$_nearbyPlayersCount',
-                          icon: Icons.person_outline,
-                        ),
-                        const SizedBox(width: 10),
-                        DiscoverStatCard(
-                          label: 'Game Venues',
+                          label: 'Nearby Venues',
                           value: '$_uniqueVenueCount',
                           icon: Icons.location_on_outlined,
                           onTap: _showGameVenuesSheet,
@@ -1070,8 +1804,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                                   name: session.name,
                                   host: session.host,
                                   date: session.date,
-                                  players: session.players,
-                                  venue: session.venue,
+                                  players: _playersLabelFor(session),
+                                  venue: _venueLabelFor(session),
+                                  onJoin: () => _joinSession(session),
+                                  joinLabel: _joinButtonLabelFor(session),
+                                  isJoinEnabled: _isJoinEnabledFor(session),
                                 ),
                               ),
                             ),
@@ -1084,15 +1821,15 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                           padding: EdgeInsets.symmetric(vertical: 24),
                           child: Center(child: CircularProgressIndicator()),
                         ),
-                      if (!_isLoadingSessions && _sessions.isEmpty)
+                      if (!_isLoadingSessions && _visibleSessions.isEmpty)
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 12),
                           child: Text(
-                            'No sessions yet. Create one to get started.',
+                            'No sessions match your current filters. Try adjusting them.',
                             style: TextStyle(color: Colors.white70),
                           ),
                         ),
-                      ..._sessions.map(
+                      ..._visibleSessions.map(
                         (session) => Padding(
                           padding: const EdgeInsets.only(bottom: 12),
                           child: DiscoverSessionCard(
@@ -1101,8 +1838,11 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                             name: session.name,
                             host: session.host,
                             date: session.date,
-                            players: session.players,
-                            venue: session.venue,
+                            players: _playersLabelFor(session),
+                            venue: _venueLabelFor(session),
+                            onJoin: () => _joinSession(session),
+                            joinLabel: _joinButtonLabelFor(session),
+                            isJoinEnabled: _isJoinEnabledFor(session),
                           ),
                         ),
                       ),
@@ -1133,378 +1873,6 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _SessionItem {
-  const _SessionItem({
-    this.id,
-    required this.gameType,
-    required this.sessionType,
-    required this.name,
-    required this.host,
-    required this.date,
-    required this.players,
-    required this.venue,
-    this.createdByUid,
-  });
-
-  final String? id;
-  final String gameType;
-  final String sessionType;
-  final String name;
-  final String host;
-  final String date;
-  final String players;
-  final String venue;
-  final String? createdByUid;
-
-  factory _SessionItem.fromMap(String id, Map<String, dynamic> json) {
-    return _SessionItem(
-      id: id,
-      gameType: (json['gameType'] as String?) ?? 'Unknown',
-      sessionType: (json['sessionType'] as String?) ?? 'Session',
-      name: (json['name'] as String?) ?? 'Untitled Session',
-      host: (json['host'] as String?) ?? 'Unknown Host',
-      date: (json['date'] as String?) ?? 'Date TBD',
-      players: (json['players'] as String?) ?? 'Players TBD',
-      venue: (json['venue'] as String?) ?? 'Venue TBD',
-      createdByUid: json['createdByUid'] as String?,
-    );
-  }
-
-  Map<String, dynamic> toJson() {
-    return {
-      'gameType': gameType,
-      'sessionType': sessionType,
-      'name': name,
-      'host': host,
-      'date': date,
-      'players': players,
-      'venue': venue,
-    };
-  }
-}
-
-class _UserProfileItem {
-  const _UserProfileItem({
-    required this.uid,
-    required this.displayName,
-    required this.email,
-    required this.bio,
-    required this.favoriteGames,
-  });
-
-  final String? uid;
-  final String displayName;
-  final String email;
-  final String bio;
-  final List<String> favoriteGames;
-
-  factory _UserProfileItem.fromMap(String docId, Map<String, dynamic> json) {
-    final displayName = (json['displayName'] as String?)?.trim();
-    final email = (json['email'] as String?)?.trim();
-    final bio = (json['bio'] as String?)?.trim();
-    final favoriteGames = (json['favoriteGames'] as List<dynamic>?)
-            ?.whereType<String>()
-            .map((entry) => entry.trim())
-            .where((entry) => entry.isNotEmpty)
-            .toList() ??
-        const [];
-
-    return _UserProfileItem(
-      uid: (json['uid'] as String?) ?? docId,
-      displayName: (displayName != null && displayName.isNotEmpty) ? displayName : 'Adventurer',
-      email: (email != null && email.isNotEmpty) ? email : 'No email available',
-      bio: bio ?? '',
-      favoriteGames: favoriteGames,
-    );
-  }
-}
-
-enum _SearchScope {
-  all,
-  profiles,
-  sessions,
-}
-
-class _SessionItemDraft {
-  const _SessionItemDraft({
-    required this.gameType,
-    required this.sessionType,
-    required this.name,
-    required this.host,
-    required this.date,
-    required this.players,
-    required this.venue,
-  });
-
-  final String gameType;
-  final String sessionType;
-  final String name;
-  final String host;
-  final String date;
-  final String players;
-  final String venue;
-
-  Map<String, dynamic> toJson() {
-    return {
-      'gameType': gameType,
-      'sessionType': sessionType,
-      'name': name,
-      'host': host,
-      'date': date,
-      'players': players,
-      'venue': venue,
-    };
-  }
-}
-
-class _StatSheetEmptyState extends StatelessWidget {
-  const _StatSheetEmptyState({
-    required this.title,
-    required this.message,
-  });
-
-  final String title;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            message,
-            style: const TextStyle(color: Colors.white70),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CreateSessionDialog extends StatefulWidget {
-  const _CreateSessionDialog({
-    this.title = 'Create Session',
-    this.submitLabel = 'Create',
-    this.initialSession,
-  });
-
-  final String title;
-  final String submitLabel;
-  final _SessionItem? initialSession;
-
-  @override
-  State<_CreateSessionDialog> createState() => _CreateSessionDialogState();
-}
-
-class _CreateSessionDialogState extends State<_CreateSessionDialog> {
-  final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _nameController;
-  late final TextEditingController _hostController;
-  late final TextEditingController _dateController;
-  late final TextEditingController _playersController;
-  late final TextEditingController _venueController;
-
-  late String _selectedGameType;
-  late String _selectedSessionType;
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedGameType = widget.initialSession?.gameType ?? 'DND';
-    _selectedSessionType = widget.initialSession?.sessionType ?? 'Campaign';
-    _nameController = TextEditingController(text: widget.initialSession?.name ?? '');
-    _hostController = TextEditingController(text: widget.initialSession?.host ?? '');
-    _dateController = TextEditingController(text: widget.initialSession?.date ?? '');
-    _playersController = TextEditingController(text: widget.initialSession?.players ?? '');
-    _venueController = TextEditingController(text: widget.initialSession?.venue ?? '');
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _hostController.dispose();
-    _dateController.dispose();
-    _playersController.dispose();
-    _venueController.dispose();
-    super.dispose();
-  }
-
-  InputDecoration _dialogInputDecoration(String label) {
-    return InputDecoration(
-      labelText: label,
-      labelStyle: const TextStyle(color: Colors.white70),
-      filled: true,
-      fillColor: const Color(0xFF2D1B4E),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide.none,
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: Color(0xFFAA00FF)),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF241340),
-      title: Text(
-        widget.title,
-        style: const TextStyle(color: Colors.white),
-      ),
-      content: SingleChildScrollView(
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: _selectedGameType,
-                dropdownColor: const Color(0xFF2D1B4E),
-                style: const TextStyle(color: Colors.white),
-                decoration: _dialogInputDecoration('Game Type'),
-                items: const [
-                  DropdownMenuItem(value: 'DND', child: Text('DND')),
-                  DropdownMenuItem(value: 'MTG', child: Text('MTG')),
-                  DropdownMenuItem(value: 'Warhammer', child: Text('Warhammer')),
-                  DropdownMenuItem(value: 'Board Games', child: Text('Board Games')),
-                ],
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() => _selectedGameType = value);
-                  }
-                },
-              ),
-              const SizedBox(height: 10),
-              DropdownButtonFormField<String>(
-                initialValue: _selectedSessionType,
-                dropdownColor: const Color(0xFF2D1B4E),
-                style: const TextStyle(color: Colors.white),
-                decoration: _dialogInputDecoration('Session Type'),
-                items: const [
-                  DropdownMenuItem(value: 'Campaign', child: Text('Campaign')),
-                  DropdownMenuItem(value: 'One Shot', child: Text('One Shot')),
-                  DropdownMenuItem(value: 'Casual', child: Text('Casual')),
-                  DropdownMenuItem(value: 'Competitive', child: Text('Competitive')),
-                ],
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() => _selectedSessionType = value);
-                  }
-                },
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _nameController,
-                style: const TextStyle(color: Colors.white),
-                decoration: _dialogInputDecoration('Session Name'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Enter a session name';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _hostController,
-                style: const TextStyle(color: Colors.white),
-                decoration: _dialogInputDecoration('Host Name'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Enter a host name';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _dateController,
-                style: const TextStyle(color: Colors.white),
-                decoration: _dialogInputDecoration('Date and Time'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Enter date and time';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _playersController,
-                style: const TextStyle(color: Colors.white),
-                decoration: _dialogInputDecoration('Players (e.g. 3-5 players)'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Enter player range';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _venueController,
-                style: const TextStyle(color: Colors.white),
-                decoration: _dialogInputDecoration('Venue'),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Enter venue';
-                  }
-                  return null;
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            if (!_formKey.currentState!.validate()) {
-              return;
-            }
-
-            Navigator.of(context).pop(
-              _SessionItemDraft(
-                gameType: _selectedGameType,
-                sessionType: _selectedSessionType,
-                name: _nameController.text.trim(),
-                host: _hostController.text.trim(),
-                date: _dateController.text.trim(),
-                players: _playersController.text.trim(),
-                venue: _venueController.text.trim(),
-              ),
-            );
-          },
-          child: Text(widget.submitLabel),
-        ),
-      ],
     );
   }
 }

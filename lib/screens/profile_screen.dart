@@ -6,6 +6,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+part 'profile_screen_parts.dart';
+
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({
     super.key,
@@ -22,6 +24,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _displayNameController = TextEditingController();
   final _bioController = TextEditingController();
   final _favoriteGamesController = TextEditingController();
+  final _provinceController = TextEditingController();
 
   bool _isSigningOut = false;
   bool _isProfileLoading = true;
@@ -41,6 +44,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _displayNameController.dispose();
     _bioController.dispose();
     _favoriteGamesController.dispose();
+    _provinceController.dispose();
     super.dispose();
   }
 
@@ -85,6 +89,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       final displayName = (data?['displayName'] as String?)?.trim();
       final bio = (data?['bio'] as String?)?.trim();
+      final province = (data?['province'] as String?)?.trim();
       final favoriteGames = (data?['favoriteGames'] as List<dynamic>?)
           ?.whereType<String>()
           .map((entry) => entry.trim())
@@ -97,6 +102,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ? user.displayName!.trim()
                 : (user.email ?? 'Adventurer'));
       _bioController.text = bio ?? '';
+      _provinceController.text = province ?? '';
       _favoriteGamesController.text = favoriteGames == null ? '' : favoriteGames.join(', ');
 
       setState(() {
@@ -119,6 +125,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     final displayName = _displayNameController.text.trim();
     final bio = _bioController.text.trim();
+    final province = _provinceController.text.trim();
     final favoriteGames = _favoriteGamesController.text
         .split(',')
         .map((entry) => entry.trim())
@@ -140,6 +147,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         'email': user.email,
         'displayName': displayName,
         'bio': bio,
+        'province': province,
         'favoriteGames': favoriteGames,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -339,7 +347,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const Spacer(),
                     const ArcanaLogo(titleSize: 28, iconSize: 32),
                     const Spacer(),
-                    const SizedBox(width: 48),
+                    IconButton(
+                      onPressed: () {
+                        Navigator.of(context).pushNamed(AppRoutes.accountSecurity);
+                      },
+                      tooltip: 'Account & Security',
+                      icon: const Icon(Icons.security_outlined, color: Colors.white),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -429,6 +443,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     ),
                                     const SizedBox(height: 10),
                                     TextField(
+                                      controller: _provinceController,
+                                      style: const TextStyle(color: Colors.white),
+                                      textCapitalization: TextCapitalization.words,
+                                      decoration: _inputDecoration('Province'),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    TextField(
                                       controller: _favoriteGamesController,
                                       style: const TextStyle(color: Colors.white),
                                       decoration: _inputDecoration('Favorite Games (comma separated)'),
@@ -454,6 +475,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                           foregroundColor: Colors.white,
                                           padding: const EdgeInsets.symmetric(vertical: 12),
                                         ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF2D1652).withValues(alpha: 0.68),
+                                  borderRadius: BorderRadius.circular(18),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  children: [
+                                    const Text(
+                                      'Account & Security',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 10),
+                                    OutlinedButton.icon(
+                                      onPressed: () {
+                                        Navigator.of(context).pushNamed(AppRoutes.accountSecurity);
+                                      },
+                                      icon: const Icon(Icons.security_outlined),
+                                      label: const Text('Open Account & Security'),
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.white,
+                                        side: const BorderSide(color: Color(0xFFAA00FF)),
+                                        padding: const EdgeInsets.symmetric(vertical: 12),
                                       ),
                                     ),
                                   ],
@@ -544,16 +599,4 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
   }
-}
-
-class _SessionSummary {
-  const _SessionSummary({
-    required this.name,
-    required this.date,
-    required this.venue,
-  });
-
-  final String name;
-  final String date;
-  final String venue;
 }

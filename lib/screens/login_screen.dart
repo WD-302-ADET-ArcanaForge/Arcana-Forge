@@ -1,5 +1,6 @@
 import 'package:arcana_forge/config/app_routes.dart';
 import 'package:arcana_forge/services/auth_service.dart';
+import 'package:arcana_forge/widgets/auth_glow_circle.dart';
 import 'package:arcana_forge/widgets/auth_text_field.dart';
 import 'package:arcana_forge/widgets/info_banner.dart';
 import 'package:flutter/material.dart';
@@ -267,7 +268,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   Positioned(
                     top: -80,
                     left: -70,
-                    child: _GlowCircle(
+                    child: AuthGlowCircle(
                       diameter: 230,
                       color: const Color(0xFFDD80FF).withValues(alpha: 0.15),
                     ),
@@ -275,7 +276,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   Positioned(
                     top: 220,
                     right: -90,
-                    child: _GlowCircle(
+                    child: AuthGlowCircle(
                       diameter: 250,
                       color: const Color(0xFFE95DB5).withValues(alpha: 0.16),
                     ),
@@ -314,28 +315,6 @@ class _LoginScreenState extends State<LoginScreen> {
             },
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _GlowCircle extends StatelessWidget {
-  const _GlowCircle({
-    required this.diameter,
-    required this.color,
-  });
-
-  final double diameter;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: diameter,
-      height: diameter,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: color,
       ),
     );
   }

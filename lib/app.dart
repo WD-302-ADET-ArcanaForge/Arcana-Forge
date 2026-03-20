@@ -2,6 +2,8 @@ import 'package:arcana_forge/config/app_routes.dart';
 import 'package:arcana_forge/config/firebase_bootstrap.dart';
 import 'package:arcana_forge/screens/chat_screen.dart';
 import 'package:arcana_forge/screens/discover_screen.dart';
+import 'package:arcana_forge/screens/loading_screen.dart';
+import 'package:arcana_forge/screens/account_security_screen.dart';
 import 'package:arcana_forge/screens/login_screen.dart';
 import 'package:arcana_forge/screens/maps_screen.dart';
 import 'package:arcana_forge/screens/profile_screen.dart';
@@ -25,9 +27,15 @@ class ArcanaForgeApp extends StatelessWidget {
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF1A0B2E),
       ),
-      initialRoute: AppRoutes.login,
+      initialRoute: AppRoutes.loading,
       onGenerateRoute: (settings) {
         switch (settings.name) {
+          case AppRoutes.loading:
+            return MaterialPageRoute<void>(
+              builder: (_) => LoadingScreen(
+                firebaseReady: bootstrapResult.firebaseReady,
+              ),
+            );
           case AppRoutes.login:
             return MaterialPageRoute<void>(
               builder: (_) => LoginScreen(
@@ -57,6 +65,10 @@ class ArcanaForgeApp extends StatelessWidget {
           case AppRoutes.profile:
             return MaterialPageRoute<void>(
               builder: (_) => ProfileScreen(authService: _authService),
+            );
+          case AppRoutes.accountSecurity:
+            return MaterialPageRoute<void>(
+              builder: (_) => const AccountSecurityScreen(),
             );
           default:
             return MaterialPageRoute<void>(

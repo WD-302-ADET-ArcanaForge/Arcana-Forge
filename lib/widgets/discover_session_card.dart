@@ -10,6 +10,9 @@ class DiscoverSessionCard extends StatelessWidget {
     required this.date,
     required this.players,
     required this.venue,
+    this.onJoin,
+    this.joinLabel = 'Join Session >',
+    this.isJoinEnabled = true,
   });
 
   final String gameType;
@@ -19,6 +22,9 @@ class DiscoverSessionCard extends StatelessWidget {
   final String date;
   final String players;
   final String venue;
+  final VoidCallback? onJoin;
+  final String joinLabel;
+  final bool isJoinEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -125,9 +131,9 @@ class DiscoverSessionCard extends StatelessWidget {
                   ),
                   padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
                 ),
-                onPressed: () {},
-                child: const Text(
-                  'Join Session >',
+                onPressed: isJoinEnabled ? onJoin : null,
+                child: Text(
+                  joinLabel,
                   style: TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.bold,
