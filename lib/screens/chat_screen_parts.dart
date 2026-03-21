@@ -18,6 +18,7 @@ class _DirectMessageScreen extends StatefulWidget {
 class _DirectMessageScreenState extends State<_DirectMessageScreen> {
   final TextEditingController _messageController = TextEditingController();
   bool _isSending = false;
+  final Set<String> _deletingMessageIds = <String>{};
 
   CollectionReference<Map<String, dynamic>> get _messagesRef => FirebaseFirestore.instance
       .collection('direct_conversations')
@@ -48,7 +49,7 @@ class _DirectMessageScreenState extends State<_DirectMessageScreen> {
           ? user.displayName!.trim()
           : (user.email ?? 'Adventurer');
 
-      await _messagesRef.add({
+      final messageRef = await _messagesRef.add({
         'text': text,
         'senderUid': user.uid,
         'senderName': senderName,
@@ -66,6 +67,7 @@ class _DirectMessageScreenState extends State<_DirectMessageScreen> {
         },
         'updatedAt': FieldValue.serverTimestamp(),
         'lastMessage': text,
+        'lastMessageId': messageRef.id,
       }, SetOptions(merge: true));
 
       if (!mounted) {
@@ -83,6 +85,87 @@ class _DirectMessageScreenState extends State<_DirectMessageScreen> {
     } finally {
       if (mounted) {
         setState(() => _isSending = false);
+      }
+    }
+  }
+
+  Future<void> _deleteMessage({
+    required String messageId,
+    required String text,
+  }) async {
+    if (_deletingMessageIds.contains(messageId)) {
+      return;
+    }
+
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2B154D),
+        title: const Text('Delete message', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'This message will be removed for everyone in this chat.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || shouldDelete != true) {
+      return;
+    }
+
+    setState(() => _deletingMessageIds.add(messageId));
+
+    try {
+      await _messagesRef.doc(messageId).delete();
+
+      final conversationRef = FirebaseFirestore.instance
+          .collection('direct_conversations')
+          .doc(widget.conversationId);
+      final conversationSnapshot = await conversationRef.get();
+      final conversationData = conversationSnapshot.data() ?? <String, dynamic>{};
+      final lastMessageId = conversationData['lastMessageId'] as String?;
+      final lastMessageText = conversationData['lastMessage'] as String?;
+      final deletedWasConversationPreview =
+          lastMessageId == messageId || (lastMessageId == null && lastMessageText == text);
+
+      if (deletedWasConversationPreview) {
+        final latestMessageSnapshot = await _messagesRef.orderBy('createdAt', descending: true).limit(1).get();
+
+        if (latestMessageSnapshot.docs.isEmpty) {
+          await conversationRef.set({
+            'lastMessage': '',
+            'lastMessageId': FieldValue.delete(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        } else {
+          final latestDoc = latestMessageSnapshot.docs.first;
+          final latestData = latestDoc.data();
+          await conversationRef.set({
+            'lastMessage': (latestData['text'] as String?) ?? '',
+            'lastMessageId': latestDoc.id,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
+    } on FirebaseException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message ?? 'Unable to delete message.')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _deletingMessageIds.remove(messageId));
       }
     }
   }
@@ -131,40 +214,50 @@ class _DirectMessageScreenState extends State<_DirectMessageScreen> {
                   padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                   itemCount: docs.length,
                   itemBuilder: (context, index) {
-                    final data = docs[index].data();
+                    final messageDoc = docs[index];
+                    final data = messageDoc.data();
                     final isMine = currentUid != null && data['senderUid'] == currentUid;
                     final sender = (data['senderName'] as String?) ?? 'Adventurer';
                     final text = (data['text'] as String?) ?? '';
+                    final isDeleting = _deletingMessageIds.contains(messageDoc.id);
 
                     return Align(
                       alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.78,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isMine ? const Color(0xFFAA00FF) : const Color(0xFF2D1B4E),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              sender,
-                              style: TextStyle(
-                                color: isMine ? Colors.white : Colors.white70,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
+                      child: GestureDetector(
+                        onLongPress: isMine && !isDeleting
+                            ? () => _deleteMessage(messageId: messageDoc.id, text: text)
+                            : null,
+                        child: Opacity(
+                          opacity: isDeleting ? 0.55 : 1,
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            constraints: BoxConstraints(
+                              maxWidth: MediaQuery.of(context).size.width * 0.78,
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              text,
-                              style: const TextStyle(color: Colors.white),
+                            decoration: BoxDecoration(
+                              color: isMine ? const Color(0xFFAA00FF) : const Color(0xFF2D1B4E),
+                              borderRadius: BorderRadius.circular(14),
                             ),
-                          ],
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  sender,
+                                  style: TextStyle(
+                                    color: isMine ? Colors.white : Colors.white70,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  text,
+                                  style: const TextStyle(color: Colors.white),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     );
